@@ -1,8 +1,8 @@
 
 flow self check output
-  $allowed = await SelfCheckOutputAction
+  $response = await SelfCheckOutputAction
 
-  if not $allowed
+  if $response.is_blocked
     if $system.config.enable_rails_exceptions
       send OutputRailException(message="Output not allowed. The output was blocked by the 'self check output' flow.")
     else

@@ -1,8 +1,8 @@
 
 flow self check input
-  $allowed = await SelfCheckInputAction
+  $response = await SelfCheckInputAction
 
-  if not $allowed
+  if $response.is_blocked
     if $system.config.enable_rails_exceptions
       send InputRailException(message="Input not allowed. The input was blocked by the 'self check input' flow.")
     else
