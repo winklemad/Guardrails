@@ -163,7 +163,8 @@ include = [
   "nemoguardrails/logging/**",
   "nemoguardrails/tracing/**",
   "nemoguardrails/server/**",
-  "nemoguardrails/guardrails/**"
+  "nemoguardrails/guardrails/**",
+  "nemoguardrails/manifests/**"
 ]
 exclude = [
   "nemoguardrails/llm/providers/trtllm/**",
