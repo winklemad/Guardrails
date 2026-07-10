@@ -14,131 +14,52 @@
 # limitations under the License.
 
 import pytest
-from pydantic import ValidationError
 
-from nemoguardrails.manifests import (
-    ActionRef,
-    Binding,
-    ConfigSpecRef,
-    RailActions,
-    RailCatalog,
-    RailConfigSchema,
-    RailDirection,
-    RailManifest,
-    RailManifestRecord,
-    RailMetadata,
-    RailSpec,
-    RailSurface,
-    import_ref_target,
-    iter_manifest_import_targets,
-    resolve_import_ref,
-)
+import nemoguardrails.manifests as manifests_pkg
+from nemoguardrails.rails.llm import rail_manifest as shim
 
 
-def _action(name: str = "check") -> ActionRef:
-    return ActionRef(name=name, target="pathlib:Path.cwd")
+def test_shim_reexports_are_identical_to_manifests_package():
+    reexported = [
+        "ActionRef",
+        "Binding",
+        "RailManifest",
+        "RailManifestRecord",
+        "RailCatalog",
+        "RailMetadata",
+        "RailSpec",
+        "RailSurface",
+        "parse_configured_surface",
+        "resolve_import_ref",
+    ]
+    for name in reexported:
+        assert getattr(shim, name) is getattr(manifests_pkg, name)
 
 
-def _record(name: str, *, action: ActionRef | None = None, surface_name: str | None = None) -> RailManifestRecord:
-    action = action or _action(f"{name}_check")
-    surfaces = ()
-    if surface_name is not None:
-        surfaces = (
-            RailSurface(
-                name=surface_name,
-                direction=RailDirection.INPUT,
-                action=action,
-                bindings=(Binding.context("text", "user_message"),),
+def test_shim_discovery_functions_on_empty_catalog():
+    shim._reset_rail_manifest_cache()
+    shim.discover_rail_manifests()
+
+    assert isinstance(shim.all_rail_manifests(), dict)
+    assert isinstance(shim.rail_surfaces(), dict)
+    assert shim.configured_rail_surfaces("input", []) == {}
+
+    shim._reset_rail_manifest_cache()
+
+
+def test_shim_rail_surfaces_rejects_duplicate_registration(monkeypatch):
+    action = shim.ActionRef(name="check", target="pathlib:Path.cwd")
+
+    def _manifest(name):
+        return shim.RailManifest(
+            name=name,
+            spec=shim.RailSpec(
+                actions=shim.RailActions(refs=(action,)),
+                surfaces=(shim.RailSurface(name="shared", direction=shim.RailDirection.INPUT, action=action),),
             ),
         )
-    manifest = RailManifest(
-        name=name,
-        spec=RailSpec(actions=RailActions(refs=(action,)), surfaces=surfaces),
-    )
-    return RailManifestRecord(manifest=manifest, source=f"test:{name}")
 
+    monkeypatch.setattr(shim, "all_rail_manifests", lambda: {"alpha": _manifest("alpha"), "beta": _manifest("beta")})
 
-def test_manifest_round_trips_with_typed_refs():
-    action = _action()
-    manifest = RailManifest(
-        name="test",
-        spec=RailSpec(
-            config_schema=RailConfigSchema(key="test", spec=ConfigSpecRef(target="pathlib:Path.cwd")),
-            actions=RailActions(refs=(action,)),
-            surfaces=(RailSurface(name="check input", direction="input", action=action),),
-        ),
-    )
-
-    assert RailManifest.model_validate(manifest.model_dump()) == manifest
-    assert iter_manifest_import_targets(manifest) == ("pathlib:Path.cwd", "pathlib:Path.cwd", "pathlib:Path.cwd")
-
-
-def test_metadata_retains_unknown_keys():
-    metadata = RailMetadata.model_validate({"display_name": "Acme", "catalog_id": "acme-42"})
-
-    assert metadata.catalog_id == "acme-42"
-    assert RailMetadata.model_validate(metadata.model_dump()) == metadata
-
-
-def test_spec_rejects_unknown_keys():
-    with pytest.raises(ValidationError):
-        RailSpec.model_validate({"unknown_field": 1})
-
-
-@pytest.mark.parametrize(
-    "factory",
-    (
-        lambda: ConfigSpecRef(target="missing_colon"),
-        lambda: ActionRef(name="", target="pathlib:Path"),
-        lambda: ActionRef(name="path", target="pathlib"),
-    ),
-)
-def test_import_refs_reject_invalid_targets(factory):
-    with pytest.raises(ValueError):
-        factory()
-
-
-def test_import_refs_resolve_nested_attributes():
-    ref = ActionRef(name="cwd", target="pathlib:Path.cwd")
-
-    assert import_ref_target(ref) == "pathlib:Path.cwd"
-    assert callable(resolve_import_ref(ref))
-
-
-def test_catalog_indexes_manifests_and_surfaces():
-    catalog = RailCatalog((_record("alpha", surface_name="check alpha"), _record("beta")))
-
-    assert set(catalog.manifests) == {"alpha", "beta"}
-    assert set(catalog.surfaces()) == {(RailDirection.INPUT, "check alpha")}
-
-
-def test_catalog_rejects_duplicate_manifest_names():
-    with pytest.raises(ValueError, match="already provided"):
-        RailCatalog((_record("duplicate"), _record("duplicate")))
-
-
-def test_catalog_rejects_duplicate_action_names():
-    action = _action("shared")
-
-    with pytest.raises(ValueError, match="already provided"):
-        RailCatalog((_record("alpha", action=action), _record("beta", action=action)))
-
-
-def test_catalog_rejects_duplicate_surface_keys():
-    with pytest.raises(ValueError, match="already provided"):
-        RailCatalog((_record("alpha", surface_name="shared"), _record("beta", surface_name="shared")))
-
-
-def test_catalog_rejects_surface_with_undeclared_action():
-    declared = _action("declared")
-    undeclared = _action("undeclared")
-    manifest = RailManifest(
-        name="invalid",
-        spec=RailSpec(
-            actions=RailActions(refs=(declared,)),
-            surfaces=(RailSurface(name="invalid", direction="input", action=undeclared),),
-        ),
-    )
-
-    with pytest.raises(ValueError, match="not declared"):
-        RailCatalog((RailManifestRecord(manifest=manifest, source="test:invalid"),))
+    with pytest.raises(ValueError, match="already registered"):
+        shim.rail_surfaces("input")
